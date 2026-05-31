@@ -66,7 +66,7 @@ CAMERA, frame = _open_camera_with_retry()
 
 # ---------- model ----------
 print("[startup] loading YOLOv8n ...", flush=True)
-MODEL = YOLO("/home/wooblay/yolov8n.pt")
+MODEL = YOLO("/home/wooblay/yolov8n.engine")  # TensorRT FP16 engine (built for this exact GPU)
 print("[startup] warming model ...", flush=True)
 _warm = MODEL(frame, verbose=False, device=DEVICE, imgsz=640)
 print(f"[startup] YOLO warm on {DEVICE_LABEL}. Flask starting on :5000 ...",
