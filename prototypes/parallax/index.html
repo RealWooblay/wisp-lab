@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WISP parallax — Stage 0 (mouse-driven)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden; }
+  #c { display:block; }
+  /* projector-sim: approximate the washed, lower-contrast look of projected light */
+  #c.projector { filter: contrast(.72) brightness(1.18) saturate(.92); }
+  /* vignette + faint wash overlay, only shown in projector mode */
+  #wash {
+    position: fixed; inset: 0; z-index: 5; pointer-events: none; display: none;
+    background:
+      radial-gradient(ellipse at center, rgba(255,250,235,.06) 0%, rgba(0,0,0,0) 45%),
+      radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(10,8,4,.45) 100%);
+  }
+  #wash.on { display: block; }
+  #hud {
+    position: fixed; top: 12px; left: 12px; z-index: 10;
+    font: 13px/1.5 -apple-system, system-ui, sans-serif; color: #9fb3c8;
+    background: rgba(0,0,0,.45); padding: 10px 12px; border-radius: 8px;
+    pointer-events: none; white-space: pre;
+  }
+  #hud b { color: #88c0d0; }
+</style>
+</head>
+<body>
+<div id="wash"></div>
+<div id="hud"></div>
+<!-- Three.js UMD build (classic script — opens straight from file://, no server needed) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// WISP parallax demo — Stage 0
+// The screen is a WINDOW into a 3D world. As your "eye" moves (mouse here, your
+// real head later), the view through that window shifts — and a flat screen
+// looks genuinely 3D. This is the exact effect WISP will project onto walls.
+//
+// Press P to toggle PROJECTOR-SIM: approximates the washed, lower-contrast,
+// no-true-black look of projected light, so you can judge whether the illusion
+// survives projector conditions (it's flattered by an emissive screen).
+// ---------------------------------------------------------------------------
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.domElement.id = 'c';
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const BG_SCREEN = 0x05070a, BG_PROJECTOR = 0x23272d;  // void vs dim wall
+scene.background = new THREE.Color(BG_SCREEN);
+scene.fog = new THREE.Fog(BG_SCREEN, 6, 16);
+
+const camera = new THREE.PerspectiveCamera(); // projectionMatrix set BY HAND below
+
+// --- lights (intensities differ in projector mode to lift the blacks) ---
+const amb = new THREE.AmbientLight(0x404a5a, 1.2);
+scene.add(amb);
+const key = new THREE.DirectionalLight(0xffffff, 1.1);
+key.position.set(2, 4, 5);
+scene.add(key);
+
+// --- the 3D world behind the "window" (z = 0 plane) ---
+const mats = [0x88c0d0, 0xbf616a, 0xa3be8c, 0xebcb8b, 0xb48ead].map(
+  c => new THREE.MeshStandardMaterial({ color: c, roughness: .45, metalness: .1 })
+);
+function add(geo, m, x, y, z) {
+  const mesh = new THREE.Mesh(geo, mats[m]);
+  mesh.position.set(x, y, z);
+  scene.add(mesh);
+  return mesh;
+}
+const spin = [];
+spin.push(add(new THREE.TorusKnotGeometry(.45, .16, 120, 16), 0,  0.0,  0.4, -2.0));
+spin.push(add(new THREE.IcosahedronGeometry(.5, 0),           1, -1.4, -0.3, -3.5));
+spin.push(add(new THREE.BoxGeometry(.8,.8,.8),                2,  1.5,  0.6, -4.5));
+spin.push(add(new THREE.DodecahedronGeometry(.55),            3, -1.1,  0.9, -5.5));
+spin.push(add(new THREE.ConeGeometry(.5, 1, 24),              4,  1.1, -0.7, -6.5));
+
+const grid = new THREE.GridHelper(20, 40, 0x223040, 0x16202c);
+grid.position.y = -1.6;
+scene.add(grid);
+const wall = new THREE.Mesh(
+  new THREE.PlaneGeometry(24, 16),
+  new THREE.MeshStandardMaterial({ color: 0x0c1420, roughness: 1 })
+);
+wall.position.z = -8;
+scene.add(wall);
+
+// ---------------------------------------------------------------------------
+// THE MATH — generalized off-axis (asymmetric) projection.
+// Screen = a rectangle W x H in the z = 0 plane, centred at origin.
+// Eye at (ex, ey, ez), ez > 0. Build a sheared frustum: apex = eye, near
+// rectangle = the screen edges. THIS is view-dependent rendering.
+// ---------------------------------------------------------------------------
+const NEAR = 0.1, FAR = 100;
+let W = 4, H = 3;
+const eye = { x: 0, y: 0, z: 5 };   // <-- Stage 2 replaces this with your head
+
+function applyParallaxProjection() {
+  const k = NEAR / eye.z;
+  const left   = (-W / 2 - eye.x) * k;
+  const right  = ( W / 2 - eye.x) * k;
+  const bottom = (-H / 2 - eye.y) * k;
+  const top    = ( H / 2 - eye.y) * k;
+  camera.projectionMatrix.makePerspective(left, right, top, bottom, NEAR, FAR);
+  camera.position.set(eye.x, eye.y, eye.z);
+}
+
+// --- input ---
+window.addEventListener('pointermove', e => {
+  const nx = (e.clientX / window.innerWidth)  * 2 - 1;
+  const ny = (e.clientY / window.innerHeight) * 2 - 1;
+  eye.x =  nx * W * 0.7;
+  eye.y = -ny * H * 0.7;
+});
+window.addEventListener('wheel', e => {
+  eye.z = Math.min(12, Math.max(2, eye.z + e.deltaY * 0.005));
+}, { passive: true });
+
+// --- projector-sim toggle ---
+let projector = false;
+const wash = document.getElementById('wash');
+window.addEventListener('keydown', e => {
+  if (e.key.toLowerCase() !== 'p') return;
+  projector = !projector;
+  if (projector) {
+    scene.background.set(BG_PROJECTOR);
+    scene.fog.color.set(BG_PROJECTOR);
+    amb.intensity = 2.6; key.intensity = 0.6;   // lift blacks, flatten contrast
+    renderer.domElement.classList.add('projector');
+    wash.classList.add('on');
+  } else {
+    scene.background.set(BG_SCREEN);
+    scene.fog.color.set(BG_SCREEN);
+    amb.intensity = 1.2; key.intensity = 1.1;
+    renderer.domElement.classList.remove('projector');
+    wash.classList.remove('on');
+  }
+});
+
+function resize() {
+  const aspect = window.innerWidth / window.innerHeight;
+  H = 3; W = H * aspect;
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+window.addEventListener('resize', resize);
+resize();
+
+const hud = document.getElementById('hud');
+function tick() {
+  requestAnimationFrame(tick);
+  for (let i = 0; i < spin.length; i++) {
+    spin[i].rotation.x += 0.004 + i * 0.001;
+    spin[i].rotation.y += 0.006 + i * 0.001;
+  }
+  applyParallaxProjection();
+  renderer.render(scene, camera);
+  hud.textContent =
+    `WISP parallax — Stage 0\n` +
+    `move mouse = move eye   ·   scroll = lean in/out\n` +
+    `P = ${projector ? 'PROJECTOR-SIM (washed)' : 'screen mode (idealized)'}\n\n` +
+    `eye  x ${eye.x.toFixed(2)}  y ${eye.y.toFixed(2)}  z ${eye.z.toFixed(2)}`;
+}
+tick();
+</script>
+</body>
+</html>
