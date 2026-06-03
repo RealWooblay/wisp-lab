@@ -1,80 +1,89 @@
 # Research log — head-tracked parallax (WISP core effect)
 
-A living document. We add to it as the experiment progresses: what we tried,
-what we saw, screenshots/video, findings, open questions. This is the WISP
-"magic" — view-dependent 3D rendering driven by the viewer's head.
+A living document. The WISP "magic" — view-dependent 3D rendering driven by the
+viewer's head. See `docs/concepts.md` for the underlying theory.
 
 ---
 
+## Setup (important)
+
+- **The Jetson is the real target.** All tracking/inference runs there.
+- **The development machine is a mirror** — it reflects the code and serves as
+  the prototyping screen for observing what.s running on the Jetson.
+- The screen demos are for developing the **math/algorithm**, NOT for judging the
+  projected look (see finding below).
+
 ## Goal / hypothesis
 
-If we track the viewer's eye position and render a 3D scene with a matching
-**off-axis projection**, a flat display becomes a convincing window into a 3D
-world — and the illusion holds as the viewer moves. (Johnny Lee, 2007, proved
-this on a plain monitor with Wii head-tracking.) If it holds on a screen, the
-next question is whether it survives **projection** onto a real surface.
-
-## Architecture (mirrors real WISP)
-
-- **Jetson = perception** (edge / real-time tier): camera → eye position → stream.
-- **Browser = the "projector"** (stand-in): Three.js renders the parallax scene.
-- **Screen stands in for the projector** while prototyping — zero projector hardware.
+Track the viewer's eye position, render a 3D scene with a matching **off-axis
+projection**, and a flat display becomes a window into 3D that holds as the
+viewer moves (Johnny Lee, 2007). Open question: does it survive real projection.
 
 ## Build stages
 
 | Stage | What | Real-work concept | Status |
 |---|---|---|---|
-| 0 | Render driven by **mouse** | off-axis frustum math | ✅ built |
-| 1 | **Head tracking** on Jetson | 3D-from-2D (recover head x,y,z from image) | next |
+| 0 | Render driven by **mouse** | off-axis frustum math | ✅ done |
+| 1 | **Head / eye / hand tracking** on Jetson | pose model + 3D-from-2D | **next (tomorrow)** |
 | 2 | **Connect** mouse → real head | camera→screen coordinate alignment | — |
-| 3 | **Hand tracking** for interaction | keypoints → scene interaction | — |
+| 3 | **Hand tracking** for interaction | keypoints → interaction | — |
+| 4 | **Real projector** on a wall | the only true look-test | — |
 
 ---
 
-## Stage 0 — mouse-driven parallax  *(2026-05-26)*
+## Stage 0 — done
 
-`prototypes/parallax/index.html`. Self-contained Three.js page; mouse = eye x/y,
-scroll = eye depth (z). The core is `applyParallaxProjection()` — an asymmetric
-view frustum whose apex is the eye and whose near rectangle is the screen edges.
+`prototypes/parallax/index.html`. Off-axis frustum parallax, mouse = eye.
+Iterated through: floating shapes → recessed room → projector-sim → and finally a
+**clean dark-wall projection sim** (glowing objects on a receding ground, soft
+edges feathering into the wall). Toggles: `F` freeze, `O` projection on/off.
 
-**Status:** working. Objects at different depths shift relative to each other as
-the eye moves → readable depth.
-
-### Captures
-- `prototypes/parallax/captures/stage0-screen.png` — idealized screen mode _(to add)_
-- `prototypes/parallax/captures/stage0-projector.png` — projector-sim mode _(to add)_
-- `prototypes/parallax/captures/stage0-parallax.mov` — short clip showing motion _(to add)_
+**What it proved:** the parallax *math* works. **What it can't prove:** how real
+projected light looks (see finding).
 
 ---
 
-## Finding — screen vs projector (important)
+## Findings
 
-The parallax **geometry is identical** regardless of display. But a projector
-differs from a screen in two ways that affect whether the illusion survives:
+### Screen vs projector
+- Parallax **geometry** is identical on any display.
+- A projector adds: **photometric washout** (no true black, additive light,
+  ambient-washed, best in a dim room) and **surface-warp** (project onto angled/
+  non-flat surfaces). The emissive screen **flatters** the effect.
 
-1. **Photometric washout.** Screen = emissive → perfect blacks, full contrast.
-   Projector = *additive light on a surface* → no true black (black = the wall),
-   lower contrast, color shifted by the surface, washed by ambient light.
-   **The emissive screen flatters the effect** — it looks punchier here than it
-   will on a wall.
-2. **Surface geometry.** Screen is flat and square to the viewer. Projector
-   throws onto an arbitrary surface at an angle → the image must be *warped to
-   the surface* (projection mapping) **in addition to** the parallax warp.
-   Two transforms, not one.
+### You cannot fake projected light on a screen  *(hard lesson)*
+A picture of a projection, shown on a flat emissive screen, is still a screen —
+it carries the screen's own limits. The screen sim is only valid for the
+**math**; the **look/feel must be judged on a real projector + real wall.**
 
-**Projector-sim mode** (press `P`) approximates #1 only: dim wall background,
-lifted blacks, reduced contrast, edge vignette. It is an *approximation* — an
-emissive screen cannot truly reproduce additive-light-with-no-black.
-
-> **Open question (needs a real projector to answer):** does the depth illusion
-> survive the contrast loss and surface texture of real projection? Schedule a
-> test with an actual short-throw projector on a matte wall.
+### Why it looks 3D at all (depth perception)
+Pictorial cues (occlusion, perspective, size, shading) give depth in any flat
+image — same as a photo. Head-tracking adds **motion parallax** (the window cue).
+**Hard limits:** stereopsis + focus can't be faked on a flat wall → effect is
+strong at a distance / in motion, breaks up close / holding still. Full theory in
+`docs/concepts.md` §4–5.
 
 ---
+
+## TOMORROW — Stage 1 (head / eye / hand tracking)
+
+**First: plug in the Jetson.** Then, all on the Jetson:
+
+1. **Pose model** — get `yolov8n-pose` onto the Jetson (download on Mac → scp,
+   since the Jetson has no internet). It gives eyes/nose/ears (head) + wrists (hands).
+2. **See it tracking** — run pose on the live camera, draw keypoints, stream to
+   the browser. Watch your own eyes/nose/wrists tracked in real time.
+3. **3D head estimation** — `x,y` from eye keypoints; **`z` (depth) from the pixel
+   distance between the eyes vs the known ~63mm spacing.** The real CV work.
+4. **Connect to parallax** — stream head pose → the demo uses your head, not the mouse.
+5. **Hands** — wrist keypoints → interaction (later, a hand-specific model for fingers).
+
+(Optionally TensorRT-export the pose model later, as we did for detection, once
+tracking is confirmed working.)
 
 ## Open questions / TODO
-- Camera framerate: IMX708 gives only **14 fps** — likely too slow for *smooth*
-  head tracking (want 30–60). Test; consider a faster sensor mode or prediction.
-- Latency budget for the full loop (capture → head pose → stream → render).
-- How much does a visible frame/edge help the illusion? (projector has no bezel)
-- Depth (z / lean-in) estimation accuracy from a single camera.
+- IMX708 is **14 fps** — likely too slow for *smooth* head tracking (want 30–60);
+  test, consider a faster sensor mode or motion prediction.
+- Full-loop latency budget (capture → pose → 3D estimate → stream → render).
+- Depth (z) estimation accuracy from a single camera.
+- Eventually: a real short-throw projector to test the actual look.
