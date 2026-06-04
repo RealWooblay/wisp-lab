@@ -24,10 +24,15 @@ viewer moves (Johnny Lee, 2007). Open question: does it survive real projection.
 | Stage | What | Real-work concept | Status |
 |---|---|---|---|
 | 0 | Render driven by **mouse** | off-axis frustum math | ✅ done |
-| 1 | **Head / eye / hand tracking** on Jetson | pose model + 3D-from-2D | **next (tomorrow)** |
-| 2 | **Connect** mouse → real head | camera→screen coordinate alignment | — |
-| 3 | **Hand tracking** for interaction | keypoints → interaction | — |
-| 4 | **Real projector** on a wall | the only true look-test | — |
+| 1 | **Head / eye / hand tracking** on Jetson | pose model + 3D-from-2D | ✅ built — `runtime/wisp_perception.py` |
+| 2 | **Connect** real head → render | head drives the off-axis parallax | ✅ built — `runtime/wisp.html` |
+| 3 | **Hand interaction** | wrist keypoints → cursor + highlight | ✅ built — `runtime/wisp.html` |
+| 4 | **Real projector** on a wall | calibration + look-test | ⏳ needs hardware |
+
+**The full software runtime is built and deployed** (perception + planner +
+renderer + projection-mapping framework). See `runtime/README.md`. Live visual
+validation (a person in frame) and the projector calibration are the remaining
+hardware-time steps.
 
 ---
 
@@ -65,9 +70,11 @@ strong at a distance / in motion, breaks up close / holding still. Full theory i
 
 ---
 
-## TOMORROW — Stage 1 (head / eye / hand tracking)
+## Stage 1–3 — BUILT ✅  (see `runtime/`)
 
-**First: plug in the Jetson.** Then, all on the Jetson:
+Done as planned below — perception, head-driven render, hand interaction,
+planner, and the projection-mapping framework are all built and deployed.
+Original plan, kept as the record:
 
 1. **Pose model** — get `yolov8n-pose` onto the Jetson (download on Mac → scp,
    since the Jetson has no internet). It gives eyes/nose/ears (head) + wrists (hands).

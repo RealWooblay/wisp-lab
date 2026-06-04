@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WISP — runtime</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0c0a07; }
+  /* #surface is what the projector "throws" — it can be corner-pinned to a wall */
+  #surface { position: fixed; inset: 0; transform-origin: 0 0; }
+  #c { position: absolute; inset: 0; display: block; }
+  /* hand cursor */
+  #cursor {
+    position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px;
+    border-radius: 50%; pointer-events: none; opacity: 0; z-index: 6;
+    background: radial-gradient(circle, rgba(242,180,92,.9) 0%, rgba(242,180,92,.25) 45%, transparent 70%);
+    transition: opacity .2s;
+  }
+  /* calibration corner handles */
+  .corner {
+    position: fixed; width: 22px; height: 22px; margin: -11px 0 0 -11px; z-index: 20;
+    border: 2px solid #F2B45C; border-radius: 50%; background: rgba(242,180,92,.2);
+    cursor: grab; display: none;
+  }
+  body.calibrating .corner { display: block; }
+  #hud {
+    position: fixed; top: 12px; left: 12px; z-index: 30;
+    font: 12px/1.5 -apple-system, system-ui, sans-serif; color: #BCB2A0;
+    background: rgba(0,0,0,.5); padding: 9px 12px; border-radius: 8px;
+    pointer-events: none; white-space: pre;
+  }
+  #hud b { color: #F2B45C; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="surface">
+  <div id="cursor"></div>
+</div>
+<div class="corner" data-i="0"></div>
+<div class="corner" data-i="1"></div>
+<div class="corner" data-i="2"></div>
+<div class="corner" data-i="3"></div>
+<div id="hud"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ===========================================================================
+// WISP runtime renderer.
+//   Eyes  -> SSE /state (head + hands) from the Jetson perception service
+//   Director (planner) -> idle / engaged / interacting
+//   Projector (renderer) -> off-axis head-tracked parallax + projection mapping
+// Mouse is a fallback when no head is tracked, so this is usable without a person.
+// ===========================================================================
+
+const STATE_URL = (location.port === '5001') ? '/state' : 'http://192.168.55.1:5001/state';
+
+// ---------- scene (clean dark-wall recessed room) ----------
+const surface = document.getElementById('surface');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.domElement.id = 'c';
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x0c0a07, 1);
+surface.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0c0a07);
+scene.fog = new THREE.Fog(0x0c0a07, 5, 15);
+const camera = new THREE.PerspectiveCamera();
+scene.add(new THREE.AmbientLight(0x6a7488, 1.2));
+const key = new THREE.DirectionalLight(0xffffff, 1.05); key.position.set(2, 4, 3); scene.add(key);
+
+function gridTex() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0a0f17'; g.fillRect(0, 0, 256, 256);
+  g.strokeStyle = '#35506e'; g.lineWidth = 3;
+  for (let i = 0; i <= 256; i += 32) { g.beginPath(); g.moveTo(i,0); g.lineTo(i,256); g.stroke(); g.beginPath(); g.moveTo(0,i); g.lineTo(256,i); g.stroke(); }
+  const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(5, 4); return t;
+}
+const D = 12;
+const room = new THREE.Mesh(new THREE.BoxGeometry(10, 7, D),
+  new THREE.MeshStandardMaterial({ map: gridTex(), side: THREE.BackSide, roughness: 1 }));
+room.position.z = -D / 2; scene.add(room);
+
+const palette = [0x88c0d0, 0xbf616a, 0xa3be8c, 0xebcb8b, 0xb48ead];
+const OBJECTS = [];
+function addObj(geo, color, x, z) {
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+    color, emissive: color, emissiveIntensity: 0.14, roughness: 0.45 }));
+  m.position.set(x, -0.9, z); m.userData.base = 0.14; scene.add(m); OBJECTS.push(m); return m;
+}
+addObj(new THREE.IcosahedronGeometry(0.7, 1), palette[0],  0.2, -3.0);
+addObj(new THREE.TorusGeometry(0.55, 0.2, 24, 64), palette[1], -1.7, -4.5);
+addObj(new THREE.BoxGeometry(1, 1, 1), palette[2],  1.8, -6.0);
+addObj(new THREE.CylinderGeometry(0.5, 0.5, 1.2, 32), palette[3], -1.4, -8.0);
+addObj(new THREE.DodecahedronGeometry(0.6), palette[4],  1.5, -9.5);
+
+// ---------- off-axis projection (the parallax core) ----------
+const NEAR = 0.1, FAR = 100;
+let W = 4, H = 3;
+const eye = { x: 0, y: 0, z: 5 };
+function applyParallax() {
+  const k = NEAR / eye.z;
+  camera.projectionMatrix.makePerspective(
+    (-W/2 - eye.x)*k, (W/2 - eye.x)*k, (H/2 - eye.y)*k, (-H/2 - eye.y)*k, NEAR, FAR);
+  camera.position.set(eye.x, eye.y, eye.z);
+  camera.updateMatrixWorld();
+}
+
+// ---------- perception state (from SSE), with fallback ----------
+const per = { head:{x:0,y:0,z:5,present:false}, hands:{left:{},right:{}}, fps:0, people:0, conn:false };
+const target = { x: 0, y: 0, z: 5 };       // where the eye wants to be
+let usingMouse = false, mouseX = 0, mouseY = 0;
+
+const es = new EventSource(STATE_URL);
+es.onopen = () => { per.conn = true; };
+es.onerror = () => { per.conn = false; };
+es.onmessage = (e) => {
+  try {
+    const s = JSON.parse(e.data);
+    per.head = s.head; per.hands = s.hands; per.fps = s.fps; per.people = s.people;
+    per.conn = true;
+  } catch (_) {}
+};
+
+window.addEventListener('pointermove', (e) => {
+  usingMouse = true;
+  mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+  mouseY = (e.clientY / window.innerHeight) * 2 - 1;
+});
+
+// ---------- planner ----------
+function planner() {
+  const h = per.head, hands = per.hands;
+  const handPresent = (hands.left && hands.left.present) || (hands.right && hands.right.present);
+  if (h && h.present && handPresent) return 'INTERACTING';
+  if (h && h.present) return 'ENGAGED';
+  if (usingMouse) return 'MOUSE';
+  return 'IDLE';
+}
+
+// ---------- hand cursor + object highlight ----------
+const cursorEl = document.getElementById('cursor');
+function activeHand() {
+  const r = per.hands.right, l = per.hands.left;
+  if (r && r.present) return r;
+  if (l && l.present) return l;
+  return null;
+}
+function updateInteraction(state) {
+  const hand = activeHand();
+  if (state === 'INTERACTING' && hand) {
+    // normalized (-1..1, y up) -> screen px
+    const sx = (hand.x * 0.5 + 0.5) * window.innerWidth;
+    const sy = (1 - (hand.y * 0.5 + 0.5)) * window.innerHeight;
+    cursorEl.style.left = sx + 'px'; cursorEl.style.top = sy + 'px'; cursorEl.style.opacity = 1;
+    // highlight nearest object on screen
+    let nearest = null, nd = 1e9;
+    for (const o of OBJECTS) {
+      const v = o.position.clone().project(camera);
+      const ox = (v.x * 0.5 + 0.5) * window.innerWidth;
+      const oy = (1 - (v.y * 0.5 + 0.5)) * window.innerHeight;
+      const d = Math.hypot(ox - sx, oy - sy);
+      if (d < nd) { nd = d; nearest = o; }
+    }
+    for (const o of OBJECTS) {
+      const tgt = (o === nearest && nd < 220) ? 0.6 : o.userData.base;
+      o.material.emissiveIntensity += 0.15 * (tgt - o.material.emissiveIntensity);
+      const s = (o === nearest && nd < 220) ? 1.12 : 1.0;
+      o.scale.x += 0.15 * (s - o.scale.x); o.scale.y = o.scale.z = o.scale.x;
+    }
+  } else {
+    cursorEl.style.opacity = 0;
+    for (const o of OBJECTS) {
+      o.material.emissiveIntensity += 0.1 * (o.userData.base - o.material.emissiveIntensity);
+      o.scale.x += 0.1 * (1 - o.scale.x); o.scale.y = o.scale.z = o.scale.x;
+    }
+  }
+}
+
+// ===========================================================================
+// PROJECTION MAPPING — corner-pin (keystone) the output onto a real surface.
+// Press M to toggle calibration; drag the 4 corners; saved to localStorage.
+// Default = identity (no warp). This is the framework the real projector uses.
+// ===========================================================================
+const cornerEls = Array.from(document.querySelectorAll('.corner'));
+let corners = loadCorners();
+function defaultCorners() {
+  return [[0,0],[window.innerWidth,0],[window.innerWidth,window.innerHeight],[0,window.innerHeight]];
+}
+function loadCorners() {
+  try { const v = JSON.parse(localStorage.getItem('wisp_corners')); if (v && v.length === 4) return v; } catch(_){}
+  return defaultCorners();
+}
+function saveCorners() { localStorage.setItem('wisp_corners', JSON.stringify(corners)); }
+
+// general 2D projective transform (source rect -> dest quad) as CSS matrix3d
+function adj(m){return [m[4]*m[8]-m[5]*m[7],m[2]*m[7]-m[1]*m[8],m[1]*m[5]-m[2]*m[4],
+  m[5]*m[6]-m[3]*m[8],m[0]*m[8]-m[2]*m[6],m[2]*m[3]-m[0]*m[5],
+  m[3]*m[7]-m[4]*m[6],m[1]*m[6]-m[0]*m[7],m[0]*m[4]-m[1]*m[3]];}
+function mulmm(a,b){const r=[];for(let i=0;i<3;i++)for(let j=0;j<3;j++){let s=0;for(let k=0;k<3;k++)s+=a[3*i+k]*b[3*k+j];r[3*i+j]=s;}return r;}
+function mulmv(m,v){return [m[0]*v[0]+m[1]*v[1]+m[2]*v[2],m[3]*v[0]+m[4]*v[1]+m[5]*v[2],m[6]*v[0]+m[7]*v[1]+m[8]*v[2]];}
+function basis(x1,y1,x2,y2,x3,y3,x4,y4){
+  const m=[x1,x2,x3,y1,y2,y3,1,1,1]; const v=mulmv(adj(m),[x4,y4,1]);
+  return mulmm(m,[v[0],0,0, 0,v[1],0, 0,0,v[2]]);
+}
+function projectionFor(dst){
+  const w=window.innerWidth,h=window.innerHeight;
+  const s=basis(0,0, w,0, 0,h, w,h);
+  const d=basis(dst[0][0],dst[0][1], dst[1][0],dst[1][1], dst[3][0],dst[3][1], dst[2][0],dst[2][1]);
+  const t=mulmm(d,adj(s)); for(let i=0;i<9;i++)t[i]/=t[8];
+  return [t[0],t[3],0,t[6], t[1],t[4],0,t[7], 0,0,1,0, t[2],t[5],0,t[8]];
+}
+function applyMapping(){
+  const def = defaultCorners();
+  const isIdentity = corners.every((c,i)=>c[0]===def[i][0]&&c[1]===def[i][1]);
+  if (isIdentity) { surface.style.transform = ''; }
+  else { surface.style.transform = 'matrix3d(' + projectionFor(corners).join(',') + ')'; }
+  cornerEls.forEach((el,i)=>{ el.style.left=corners[i][0]+'px'; el.style.top=corners[i][1]+'px'; });
+}
+let dragI = -1;
+cornerEls.forEach((el)=>{
+  el.addEventListener('pointerdown',(e)=>{ dragI=+el.dataset.i; el.setPointerCapture(e.pointerId); });
+});
+window.addEventListener('pointermove',(e)=>{ if(dragI>=0){ corners[dragI]=[e.clientX,e.clientY]; applyMapping(); }});
+window.addEventListener('pointerup',()=>{ if(dragI>=0){ dragI=-1; saveCorners(); }});
+window.addEventListener('keydown',(e)=>{
+  const k=e.key.toLowerCase();
+  if(k==='m'){ document.body.classList.toggle('calibrating'); }
+  if(k==='r'){ corners=defaultCorners(); saveCorners(); applyMapping(); }   // reset mapping
+});
+
+// ---------- resize ----------
+function resize(){
+  const w=window.innerWidth,h=window.innerHeight;
+  renderer.setSize(w,h); H=3; W=H*(w/h); applyMapping();
+}
+window.addEventListener('resize',resize); resize();
+
+// ---------- main loop ----------
+const hud=document.getElementById('hud');
+let idleT=0;
+function tick(){
+  requestAnimationFrame(tick);
+  const state=planner();
+
+  // decide target eye
+  if(state==='ENGAGED'||state==='INTERACTING'){
+    target.x = per.head.x * W * 0.9;
+    target.y = per.head.y * H * 0.9;
+    target.z = per.head.z;
+  } else if(state==='MOUSE'){
+    target.x = mouseX * W * 0.9; target.y = -mouseY * H * 0.9; target.z = 5;
+  } else { // IDLE: gentle ambient drift so it feels alive
+    idleT += 0.006;
+    target.x = Math.sin(idleT)*0.5; target.y = Math.cos(idleT*0.8)*0.25; target.z = 5.4;
+  }
+  // smooth toward target
+  eye.x += 0.18*(target.x-eye.x); eye.y += 0.18*(target.y-eye.y); eye.z += 0.12*(target.z-eye.z);
+
+  applyParallax();
+  renderer.render(scene,camera);
+  updateInteraction(state);
+
+  hud.textContent =
+    `WISP runtime   ${per.conn?'● connected':'○ no signal'}\n`+
+    `state: ${state}   people:${per.people}   eyes-fps:${per.fps}\n`+
+    `head ${per.head.present?'Y':'-'}  (${eye.x.toFixed(2)}, ${eye.y.toFixed(2)}, z${eye.z.toFixed(1)})\n`+
+    `M = projection-map (keystone)   R = reset map`;
+}
+tick();
+</script>
+</body>
+</html>
