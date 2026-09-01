@@ -22,6 +22,7 @@ eyes vs a known ~63 mm interpupillary distance. Real accuracy needs camera
 intrinsic calibration (a future step). x/y are reliable; z is a usable estimate.
 """
 import json
+import os
 import sys
 import threading
 import time
@@ -32,7 +33,7 @@ from flask import Flask, Response, render_template_string
 from ultralytics import YOLO
 
 # ---------- config ----------
-MODEL_PATH = "/home/wooblay/yolov8n-pose.pt"
+MODEL_PATH = os.getenv("WISP_MODEL_PATH", os.path.expanduser("~/yolov8n-pose.pt"))
 FRAME_W, FRAME_H = 960, 540
 MIRROR = True              # camera faces the viewer -> mirror x for natural feel
 KP_CONF = 0.35             # min keypoint confidence to trust

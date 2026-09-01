@@ -29,21 +29,23 @@ output; when the real projector is connected, you swap the display and calibrate
 On the Jetson (note the `LD_LIBRARY_PATH` — required for the GPU torch):
 
 ```bash
-LD_LIBRARY_PATH=$HOME/libcusparselt/lib:$LD_LIBRARY_PATH python3 ~/wisp_perception.py
+export WISP_MODEL_PATH="$HOME/yolov8n-pose.pt"
+LD_LIBRARY_PATH="$HOME/libcusparselt/lib:$LD_LIBRARY_PATH" \
+  python3 runtime/wisp_perception.py
 ```
 
 Then on the Mac, open the device-served UI (same-origin, no CORS):
 
 ```
-http://192.168.55.1:5001/wisp        ← the experience (renderer)
-http://192.168.55.1:5001/camera      ← debug feed: pose skeleton + head/hand markers
-http://192.168.55.1:5001/state        ← raw SSE perception stream (JSON)
-http://192.168.55.1:5001/health       ← status JSON
+http://<jetson-host>:5001/wisp        ← the experience (renderer)
+http://<jetson-host>:5001/camera      ← debug feed: pose skeleton + head/hand markers
+http://<jetson-host>:5001/state       ← raw SSE perception stream (JSON)
+http://<jetson-host>:5001/health      ← status JSON
 ```
 
-(The renderer also runs from a local copy of `wisp.html` opened on the Mac —
-CORS is enabled — and falls back to **mouse control** when no head is tracked,
-so it's usable without a person in frame.)
+(The renderer also runs from a local copy of `wisp.html`. Pass the Jetson state
+endpoint as `?state=http://<jetson-host>:5001/state`; CORS is enabled. It falls
+back to **mouse control** when no head is tracked.)
 
 ## Controls (in the renderer)
 

@@ -51,7 +51,8 @@
 // Mouse is a fallback when no head is tracked, so this is usable without a person.
 // ===========================================================================
 
-const STATE_URL = (location.port === '5001') ? '/state' : 'http://192.168.55.1:5001/state';
+const STATE_URL = new URLSearchParams(location.search).get('state')
+  || ((location.port === '5001') ? '/state' : 'http://localhost:5001/state');
 
 // ---------- scene (clean dark-wall recessed room) ----------
 const surface = document.getElementById('surface');

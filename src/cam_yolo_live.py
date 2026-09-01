@@ -12,6 +12,7 @@ Endpoints:
   /stream   MJPEG stream
   /health   JSON status
 """
+import os
 import sys
 import time
 
@@ -66,7 +67,8 @@ CAMERA, frame = _open_camera_with_retry()
 
 # ---------- model ----------
 print("[startup] loading YOLOv8n ...", flush=True)
-MODEL = YOLO("/home/wooblay/yolov8n.engine")  # TensorRT FP16 engine (built for this exact GPU)
+MODEL_PATH = os.getenv("WISP_MODEL_PATH", os.path.expanduser("~/yolov8n.engine"))
+MODEL = YOLO(MODEL_PATH)  # TensorRT FP16 engine built for this Jetson
 print("[startup] warming model ...", flush=True)
 _warm = MODEL(frame, verbose=False, device=DEVICE, imgsz=640)
 print(f"[startup] YOLO warm on {DEVICE_LABEL}. Flask starting on :5000 ...",
