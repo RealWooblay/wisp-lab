@@ -9,7 +9,7 @@ viewer's head. See `docs/concepts.md` for the underlying theory.
 
 - **The Jetson is the real target.** All tracking/inference runs there.
 - **The development machine is a mirror** — it reflects the code and serves as
-  the prototyping screen for observing what.s running on the Jetson.
+  the prototyping screen for observing what's running on the Jetson.
 - The screen demos are for developing the **math/algorithm**, NOT for judging the
   projected look (see finding below).
 
